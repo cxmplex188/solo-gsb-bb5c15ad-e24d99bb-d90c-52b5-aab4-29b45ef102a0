@@ -1,0 +1,12 @@
+{
+  "plasmid_length": 1000,
+  "fragments": [
+    {"length": 200, "next_boundary": "EcoRI@300"},
+    {"length": 300, "next_boundary": "BamHI@600"},
+    {"length": 250, "next_boundary": "HindIII@850"},
+    {"length": 250, "next_boundary": "EcoRI@100"}
+  ],
+  "observed_bands": [202, 251, 548],
+  "band_match_tolerance": 10,
+  "max_failed_boundaries": 2
+}

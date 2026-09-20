@@ -13,6 +13,7 @@ from app.models import (
     IdentifyRequest,
     MixtureRequest,
     PanelRequest,
+    PartialFailureRequest,
 )
 
 
@@ -415,6 +416,71 @@ def validate_batch_identify_request(req: BatchIdentifyRequest) -> BatchIdentifyR
                     f"超过允许上限 {settings.MAX_BANDS}",
                     "too_many_bands",
                 ))
+
+    if errors:
+        raise DigestValidationError(errors)
+    return req
+
+
+def validate_partial_failure_request(
+    req: PartialFailureRequest,
+) -> PartialFailureRequest:
+    """partial-failure 接口的语义校验：片段总长、边界名唯一/空白与规模上限。
+
+    观测为空、片段长度非正、容差或失败边界上限非法等基础字段约束由
+    Pydantic 模型直接拦截，与此处一样输出统一结构的 422 响应。
+    """
+    errors: list[dict] = []
+    boundary_count = len(req.fragments)
+
+    if boundary_count > settings.MAX_PARTIAL_FAILURE_BOUNDARIES:
+        errors.append(_err(
+            ["fragments"],
+            f"理论片段（酶切边界）数量（{boundary_count}）超过允许上限 "
+            f"{settings.MAX_PARTIAL_FAILURE_BOUNDARIES}",
+            "too_many_partial_failure_boundaries",
+        ))
+
+    total_length = sum(f.length for f in req.fragments)
+    if total_length != req.plasmid_length:
+        errors.append(_err(
+            ["fragments"],
+            f"理论片段长度之和（{total_length}）必须等于质粒长度"
+            f"（{req.plasmid_length}），当前差值为 {total_length - req.plasmid_length}",
+            "fragment_length_mismatch",
+        ))
+
+    seen_names: set[str] = set()
+    for i, fragment in enumerate(req.fragments):
+        name = fragment.next_boundary
+        if not name.strip():
+            errors.append(_err(
+                ["fragments", i, "next_boundary"],
+                "酶切边界名不能为空白",
+                "invalid_boundary_name",
+            ))
+        if name in seen_names:
+            errors.append(_err(
+                ["fragments", i, "next_boundary"],
+                f"酶切边界名重复：{name}",
+                "duplicate_boundary_name",
+            ))
+        seen_names.add(name)
+
+    if req.max_failed_boundaries > boundary_count:
+        errors.append(_err(
+            ["max_failed_boundaries"],
+            f"失败边界数上限（{req.max_failed_boundaries}）不能超过边界总数"
+            f"（{boundary_count}）",
+            "max_failed_boundaries_too_large",
+        ))
+
+    if len(req.observed_bands) > settings.MAX_BANDS:
+        errors.append(_err(
+            ["observed_bands"],
+            f"条带数量（{len(req.observed_bands)}）超过允许上限 {settings.MAX_BANDS}",
+            "too_many_bands",
+        ))
 
     if errors:
         raise DigestValidationError(errors)

@@ -24,6 +24,8 @@ services:
       # decision-tree 接口独立的规模上限（记忆化极小化极大搜索状态随两者增长）
       MAX_DECISION_GENOTYPES: "12"
       MAX_DECISION_ENZYMES: "10"
+      # partial-failure 接口允许的最大理论片段（边界）数（枚举至多该规模的全部边界子集）
+      MAX_PARTIAL_FAILURE_BOUNDARIES: "16"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import os,sys,urllib.request; port=os.getenv('APP_PORT','8000'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=3).status==200 else 1)"]

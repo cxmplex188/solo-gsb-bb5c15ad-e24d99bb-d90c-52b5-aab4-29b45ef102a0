@@ -433,3 +433,74 @@ class DecisionTreeResponse(BaseModel):
 
 
 DecisionBranchOut.model_rebuild()
+
+
+# ------------------------------------------------- 酶切部分失败反推（partial-failure）模型
+
+class TheoreticalFragmentInput(BaseModel):
+    length: int = Field(
+        ..., gt=0, description="按圆环顺序排列的理论片段长度（bp），必须为正数"
+    )
+    following_boundary: str = Field(
+        ..., min_length=1,
+        description="该片段后边界的名称（下一个酶切边界）；所有片段的后边界名须唯一",
+    )
+
+
+class PartialFailureRequest(BaseModel):
+    plasmid_length: int = Field(..., gt=0, description="环状质粒总长度（bp）")
+    fragments: list[TheoreticalFragmentInput] = Field(
+        ..., min_length=1,
+        description="按圆环顺序排列的理论片段：每段给出长度及其后边界名称；"
+                    "全部片段长度之和必须等于质粒长度，后边界名不可重复",
+    )
+    observed_bands: list[NonNegativeBand] = Field(
+        ..., min_length=1, description="一次凝胶观测到的条带长度列表（bp），至少 1 条"
+    )
+    band_match_tolerance: NonNegativeBand = Field(
+        ..., description="条带匹配容差（bp）：长度差不超过该值的预测/观测条带才允许配对"
+    )
+    max_failed_boundaries: int = Field(
+        ..., ge=0,
+        description="最多枚举的失败（未切开）边界数：枚举失败边界数 0..该值的全部"
+                    "边界子集，且不得超过理论片段（边界）总数",
+    )
+
+
+class PartialFailureMergedBandOut(BaseModel):
+    length: float = Field(description="失败边界合并后该预测条带的长度（bp，等于合并片段长度之和）")
+    fragment_indexes: list[int] = Field(
+        description="合并进该条带的理论片段序号（按请求中的圆环顺序，从 1 开始）"
+    )
+    fragment_lengths: list[int] = Field(description="各组成理论片段的长度（bp），与片段序号一一对应")
+    failed_boundaries_inside: list[str] = Field(
+        description="该条带内部被合并跨越的失败边界名（条带末尾保留切开的边界不在内），按圆环顺序"
+    )
+    crosses_origin: bool = Field(description="该合并条带是否跨过坐标原点（含末段理论片段）")
+
+
+class PartialFailureResponse(BaseModel):
+    plasmid_length: int
+    band_match_tolerance: float
+    observed_band_count: int
+    fragment_count: int = Field(description="请求中的理论片段（边界）数量")
+    max_failed_boundaries: int
+    evaluated_subset_count: int = Field(
+        description="实际评估的失败边界子集数量，等于 Σ C(边界数, k)（k = 0..实际上限）"
+    )
+    failed_boundary_count: int = Field(description="选定诊断的失败（未切开）边界数量")
+    failed_boundaries: list[str] = Field(
+        description="选定诊断的失败边界名，按名称字典序排列；完全酶切时为空"
+    )
+    merged_predicted_bands: list[float] = Field(
+        description="失败边界合并相邻片段后的预测条带长度（bp），按长度升序"
+    )
+    merged_band_details: list[PartialFailureMergedBandOut] = Field(
+        description="合并条带的组成依据（按圆环顺序，首条含第 1 个理论片段）"
+    )
+    match: SampleMatchOut = Field(
+        description="合并预测条带与观测条带的一对一最小代价匹配结果（与鉴别接口同结构）"
+    )
+    selection_reason: str = Field(
+        description="中文选定依据：未匹配条带数、总误差、失败边界数及边界名序列如何决定唯一结果"
+    )

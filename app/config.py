@@ -30,5 +30,11 @@ class Settings:
     MAX_DECISION_GENOTYPES: int = int(os.getenv("MAX_DECISION_GENOTYPES", "12"))
     MAX_DECISION_ENZYMES: int = int(os.getenv("MAX_DECISION_ENZYMES", "10"))
 
+    # partial-failure 接口允许的最大理论片段（边界）数：需枚举至多
+    # max_failed_boundaries 规模的全部边界子集（最坏 2^n），随边界数指数增长
+    MAX_PARTIAL_FAILURE_BOUNDARIES: int = int(
+        os.getenv("MAX_PARTIAL_FAILURE_BOUNDARIES", "16")
+    )
+
 
 settings = Settings()

@@ -26,8 +26,11 @@ from app.models import (
     MixtureResponse,
     PanelRequest,
     PanelResponse,
+    PartialFailureRequest,
+    PartialFailureResponse,
 )
 from app.panel import build_panel
+from app.partial_failure import resolve_partial_failure
 from app.validation import (
     DigestValidationError,
     validate_batch_identify_request,
@@ -35,10 +38,11 @@ from app.validation import (
     validate_identify_request,
     validate_mixture_request,
     validate_panel_request,
+    validate_partial_failure_request,
     validate_request,
 )
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 app = FastAPI(
     title="Circular DNA Double-Digest Discrimination Service",
@@ -54,7 +58,9 @@ app = FastAPI(
         "最小化未匹配总数与总误差，字典序破同分）；还可为多个基因型复用同一套"
         "圆环酶切与聚带规则生成规范化条带签名，以记忆化极小化极大搜索精确生成"
         "最小化最坏实验次数的自适应双酶切决策树（同深度依次取内部节点更少、"
-        "酶对键字典序更小的方案）。"
+        "酶对键字典序更小的方案）；还可枚举不超过上限的未切开边界子集，"
+        "把失败边界两侧相邻片段在圆环上（含跨原点）合并后再做一对一条带匹配，"
+        "从异常凝胶反推最可能的部分酶切失败边界。"
     ),
     version=VERSION,
 )
@@ -150,6 +156,17 @@ async def digest_batch_identify(req: BatchIdentifyRequest) -> BatchIdentifyRespo
 async def digest_decision_tree(req: DecisionTreeRequest) -> DecisionTreeResponse:
     validate_decision_tree_request(req)
     return build_decision_tree(req)
+
+
+@app.post(
+    "/api/v1/digest/partial-failure",
+    response_model=PartialFailureResponse,
+    tags=["digest"],
+    summary="从异常凝胶反推最可能未切开的酶切边界（部分酶切失败诊断）",
+)
+async def digest_partial_failure(req: PartialFailureRequest) -> PartialFailureResponse:
+    validate_partial_failure_request(req)
+    return resolve_partial_failure(req)
 
 
 if __name__ == "__main__":

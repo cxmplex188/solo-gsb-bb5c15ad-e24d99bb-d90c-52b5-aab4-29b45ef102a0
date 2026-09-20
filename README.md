@@ -1,6 +1,6 @@
 # 环状 DNA 双酶切鉴别服务
 
-基于 FastAPI 的圆形（环状）DNA 双酶切鉴别服务，提供六个互补接口：
+基于 FastAPI 的圆形（环状）DNA 双酶切鉴别服务，提供七个互补接口：
 
 - **方案推荐**：客户端提交质粒长度、参考型与变异型的候选酶切位点、最小可见片段长度和条带分辨容差，服务枚举所有不同酶对，按圆环相邻切点计算两种样本的片段长度，将容差内的片段聚为同一条电泳条带，并推荐能够区分两种样本的酶对。
 - **样本鉴别**：客户端提交同一质粒参考型、变异型的预测条带长度和一次凝胶观测长度列表，服务在给定容差内做确定性的一对一最小代价匹配，分别计算两种样本的缺失条带、额外条带与总误差，判定观测样本为参考型、变异型或无法区分。
@@ -8,6 +8,7 @@
 - **混合样本解析**：客户端提交若干**命名候选成分**各自的预测条带、一次混合样本观测条带、匹配容差与成分数上限，服务枚举不超过上限的全部候选子集，先把每个子集的预测条带按容差做单连接聚带（共迁移条带只出现一次、代表长度取均值），再复用鉴别接口的一对一最小代价匹配，按未匹配条带数、总误差、成分数、候选名列表字典序唯一选定最吻合的成分组合。
 - **批量盲样分配**：客户端提交若干**命名预测谱型**与若干**命名观测泳道**、条带匹配容差和单条分配允许的最大未匹配条带数，服务先复用鉴别接口的一对一条带匹配评估每条“谱型-泳道”边（未匹配数超阈值的边不可用），再在可用边上做**全局一对一分配**，依次最大化已分配泳道数、最小化未匹配总数、最小化总误差，并以泳道名排序后的谱型名序列字典序破同分，返回逐项匹配依据、未分配泳道与未使用谱型。
 - **自适应决策树**：客户端提交质粒长度、可见阈值、分辨容差及各基因型在各酶上的切点，服务为每个酶对 × 每个基因型复用同一套圆环酶切与聚带规则生成**规范化条带签名**，先按全部酶对上的签名向量合并永远无法区分的基因型，再以“候选等价类集合 + 剩余酶对”为状态做**记忆化极小化极大搜索**，精确生成最小化最坏实验次数的自适应决策树（同深度依次取内部节点更少、酶对键字典序更小的方案，忽略不能拆分当前集合的酶对）。
+- **部分酶切失败反推**：客户端提交质粒长度、按圆环顺序排列的理论片段（每段长度及其后边界名称）、一次异常凝胶的观测条带、匹配容差与最大失败边界数，服务枚举失败边界数不超过上限的**全部边界子集**；失败（未切开）边界会合并其相邻片段（正确处理连续失败与首尾**跨原点**合并），再复用鉴别接口的一对一条带匹配，按未匹配条带数、总误差、失败边界数、边界名序列依次选出**唯一诊断**，返回合并后预测条带、逐条匹配与失败边界。
 
 **核心功能为纯本地数学计算，不依赖数据库、缓存或任何外部服务。**
 
@@ -49,6 +50,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | 混合样本解析 | POST | `http://localhost:8000/api/v1/digest/mixture` |
 | 批量盲样分配 | POST | `http://localhost:8000/api/v1/digest/batch-identify` |
 | 自适应决策树 | POST | `http://localhost:8000/api/v1/digest/decision-tree` |
+| 部分酶切失败反推 | POST | `http://localhost:8000/api/v1/digest/partial-failure` |
 | 交互式 API 文档（Swagger） | GET | `http://localhost:8000/docs` |
 | OpenAPI Schema | GET | `http://localhost:8000/openapi.json` |
 
@@ -56,7 +58,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ```bash
 curl http://localhost:8000/health
-# {"status":"ok","service":"circular-dna-digest","version":"1.5.0"}
+# {"status":"ok","service":"circular-dna-digest","version":"1.6.0"}
 ```
 
 ---
@@ -78,6 +80,7 @@ curl http://localhost:8000/health
 | `MAX_BATCH_LANES` | `32` | batch-identify 接口允许的最大观测泳道数（全局一对一分配为最小费用最大流） | 编辑 `environment` |
 | `MAX_DECISION_GENOTYPES` | `12` | decision-tree 接口允许的最大基因型数（极小化极大搜索状态随基因型数增长） | 编辑 `environment` |
 | `MAX_DECISION_ENZYMES` | `10` | decision-tree 接口允许的最大酶数量（酶对数为 C(n,2)，独立于 `MAX_ENZYMES`） | 编辑 `environment` |
+| `MAX_PARTIAL_FAILURE_BOUNDARIES` | `16` | partial-failure 接口允许的最大理论片段（边界）数（需枚举至多 `max_failed_boundaries` 规模的全部边界子集，最坏 2ⁿ） | 编辑 `environment` |
 
 ---
 
@@ -381,6 +384,48 @@ curl -X POST http://localhost:8000/api/v1/digest/decision-tree \
 - `indistinguishable_groups` / `indistinguishable_group_count`：永远无法区分的基因型组（组内与各组均按字典序）；全部基因型可区分时为空。
 - `tree_reason`：中文依据，说明签名规范化、不可区分合并、极小化极大目标与两级破同分规则。
 
+### 部分酶切失败反推（POST `/api/v1/digest/partial-failure`）
+
+#### 请求体（JSON）
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| `plasmid_length` | int | > 0，环状质粒总长度（bp）；全部理论片段长度之和必须恰好等于该值 |
+| `fragments` | array | 按**圆环顺序**排列的理论片段，至少 1 段，总数不超过 `MAX_PARTIAL_FAILURE_BOUNDARIES`（默认 16） |
+| `fragments[].length` | int | 该理论片段长度（bp），> 0 |
+| `fragments[].following_boundary` | string | 该片段**后边界**的名称（其后的酶切边界）；各片段后边界名**不可重复**、不可为空白 |
+| `observed_bands` | number[] | 一次异常凝胶观测到的条带长度（bp），每条 ≥ 0，**至少 1 条** |
+| `band_match_tolerance` | number | ≥ 0，条带匹配容差（bp） |
+| `max_failed_boundaries` | int | ≥ 0 且 ≤ 片段总数；枚举失败边界数 0..该值的全部边界子集 |
+
+片段按请求顺序视为圆环顺序：第 i 段 `f_i` 结束于边界 `B_i`，末段 `f_{n-1}` 的后边界 `B_{n-1}` 跨过坐标原点与首段相接。请求示例见 [`examples/partial-failure-request.json`](examples/partial-failure-request.json)：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/digest/partial-failure \
+  -H 'Content-Type: application/json' \
+  -d @examples/partial-failure-request.json
+```
+
+#### 算法说明（部分失败反推）
+
+1. **枚举失败边界子集**：对失败边界数 k = 0..`max_failed_boundaries` 的**全部** `C(n, k)` 个子集逐一评估（边界按请求中的圆环顺序编号，结果与提交顺序无关）。k = 0 即完全酶切。
+2. **失败边界合并**：边界 `B_i` 失败（未切开）意味着片段 `f_i` 末尾不断开、与下一段合并；**连续多个失败边界**把其覆盖的片段并入同一条带；`B_{n-1}` 失败时末段与首段**跨坐标原点**合并。全部边界都失败时整环合并为 1 条长度等于质粒长度的条带。合并后条带长度之和恒等于质粒长度。
+3. **一对一条带匹配**：把合并后预测条带（按长度升序）与观测条带复用鉴别接口的同一套确定性一对一最小代价匹配（先最大化匹配对数，再最小化总误差），得到逐条配对、缺失条带与额外条带。
+4. **唯一诊断**：全部评估子集依次按 ① **未匹配条带总数**（缺失 + 额外）升序、② **总误差**升序、③ **失败边界数**升序、④ **排序后的失败边界名序列字典序**升序比较，次序④保证即使指标完全相同也有唯一诊断。
+
+#### 响应要点（部分失败反推）
+
+- `failed_boundaries` / `failed_boundary_count`：选定诊断的失败边界名（按名称字典序；完全酶切时为空）及数量。
+- `merged_predicted_bands`：合并后预测条带长度（bp），按长度升序。
+- `merged_band_details`：合并条带的**组成依据**（按圆环顺序，首条含第 1 个理论片段），每条含
+  - `length`：合并条带长度（组成片段长度之和）；
+  - `fragment_indexes` / `fragment_lengths`：组成理论片段的序号（按请求顺序从 1 开始）与各自长度；
+  - `failed_boundaries_inside`：该条带内部被跨越的失败边界名（条带末尾保留切开的边界不在内），按圆环顺序；
+  - `crosses_origin`：该合并条带是否跨过坐标原点（含末段理论片段）。
+- `match`：与鉴别接口**完全同结构**——逐条匹配依据（按预测长度升序）、`missing_bands` / `extra_bands` 及各项计数与总误差。
+- `evaluated_subset_count`：实际评估的子集数，等于 `Σ C(n, k)`（k = 0..min(上限, n)）。
+- `selection_reason`：中文选定依据，说明四级比较次序如何决定唯一结果。
+
 ### 拒绝条件（HTTP 422）
 
 以下输入问题整体拒绝，返回统一结构 `{"code":"validation_failed","errors":[...]}`，一次性报告全部错误：
@@ -429,6 +474,15 @@ curl -X POST http://localhost:8000/api/v1/digest/decision-tree \
 - 各酶的基因型名集合不一致、基因型名为空白、未定义任何基因型、基因型数量超过独立上限 `MAX_DECISION_GENOTYPES`（默认 12）；
 - 质粒长度 ≤ 0、最小可见片段 ≥ 质粒长度、容差为负等字段约束错误。
 
+部分酶切失败反推接口（`/api/v1/digest/partial-failure`）：
+
+- **理论片段长度之和不等于质粒长度**；
+- 任一片段长度 ≤ 0、片段列表为空；
+- 后边界名**重复**或为空白；
+- 理论片段（边界）数量超过 `MAX_PARTIAL_FAILURE_BOUNDARIES`（默认 16）上限；
+- `max_failed_boundaries` 缺失、非整数、为负，或**超过片段（边界）总数**；
+- 观测条带列表为空、任一条带长度为负、容差为负 / 缺失 / 非数值；观测列表超过 `MAX_BANDS` 上限。
+
 注意：推荐接口中切点不足两个属于**酶对级别**的拒绝（记录在 `rejected_pairs`，HTTP 200），而非请求级别错误；面板接口中某变异型无可用酶对时同样返回 HTTP 200（列入 `uncovered_variants`，不返回部分面板）；批量盲样分配接口中所有候选边都超过未匹配阈值时同样返回 HTTP 200（`assignments` 为空、全部泳道列入 `unassigned_lanes`）；决策树接口中某基因型在某酶对上切点不足 2 个或某酶对对全部基因型签名相同，均属于**酶对级别**结果（空签名 / 列入 `non_discriminating_pairs`，HTTP 200），永远无法区分的基因型列入 `indistinguishable_groups`。
 
 ---
@@ -438,7 +492,7 @@ curl -X POST http://localhost:8000/api/v1/digest/decision-tree \
 ```
 .
 ├── app/
-│   ├── main.py          # FastAPI 入口：健康检查、推荐/鉴别/面板/混合/批量分配/决策树路由、统一 422 处理
+│   ├── main.py          # FastAPI 入口：健康检查、推荐/鉴别/面板/混合/批量分配/决策树/部分失败反推路由、统一 422 处理
 │   ├── models.py        # 请求/响应 Pydantic 模型
 │   ├── validation.py    # 越界、重复位点、名称一致性、条带/候选/基因型规模等语义校验
 │   ├── digest.py        # 圆环片段、条带聚类、酶对枚举与排序（纯函数）
@@ -447,6 +501,7 @@ curl -X POST http://localhost:8000/api/v1/digest/decision-tree \
 │   ├── mixture.py       # 混合样本共迁移聚带、子集枚举与最优子集选定（纯函数）
 │   ├── batch_identify.py # 批量盲样谱型-泳道边评估与全局一对一最小费用最大流分配（纯函数）
 │   ├── decision_tree.py # 规范化条带签名、不可区分合并与记忆化极小化极大决策树（纯函数）
+│   ├── partial_failure.py # 失败边界的圆环片段合并（含连续失败/跨原点）、子集枚举与唯一诊断选定（纯函数）
 │   └── config.py        # 环境变量配置（均有默认值）
 ├── tests/               # pytest 单元 + API 端到端测试
 ├── examples/request.json
@@ -455,6 +510,7 @@ curl -X POST http://localhost:8000/api/v1/digest/decision-tree \
 ├── examples/mixture-request.json
 ├── examples/batch-identify-request.json
 ├── examples/decision-tree-request.json
+├── examples/partial-failure-request.json
 ├── Dockerfile
 ├── docker-compose.yml
 └── requirements.txt

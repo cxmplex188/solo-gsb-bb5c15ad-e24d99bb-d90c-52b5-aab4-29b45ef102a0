@@ -13,6 +13,7 @@ from app.models import (
     IdentifyRequest,
     MixtureRequest,
     PanelRequest,
+    PartialFailureRequest,
 )
 
 
@@ -360,6 +361,71 @@ def validate_decision_tree_request(req: DecisionTreeRequest) -> DecisionTreeRequ
                     f"酶 {name} 在基因型 {gname} 中存在重复切点 {dupes}",
                     "duplicate_site",
                 ))
+
+    if errors:
+        raise DigestValidationError(errors)
+    return req
+
+
+def validate_partial_failure_request(req: PartialFailureRequest) -> PartialFailureRequest:
+    """partial-failure 接口的语义校验：片段总长、边界名唯一性/空白与规模上限。
+
+    质粒长度非正、片段长度非正、观测为空 / 为负、容差非法、
+    ``max_failed_boundaries`` 为负等基础字段约束由 Pydantic 模型直接拦截，
+    与此处一样输出统一结构的 422 响应。
+    """
+    errors: list[dict] = []
+    fragment_count = len(req.fragments)
+
+    total_length = sum(f.length for f in req.fragments)
+    if total_length != req.plasmid_length:
+        errors.append(_err(
+            ["fragments"],
+            f"理论片段长度之和（{total_length}）必须等于质粒长度"
+            f"（{req.plasmid_length}）",
+            "fragment_length_mismatch",
+        ))
+
+    if fragment_count > settings.MAX_PARTIAL_FAILURE_BOUNDARIES:
+        errors.append(_err(
+            ["fragments"],
+            f"理论片段（边界）数量（{fragment_count}）超过允许上限 "
+            f"{settings.MAX_PARTIAL_FAILURE_BOUNDARIES}（需枚举至多 "
+            f"max_failed_boundaries 规模的全部边界子集）",
+            "too_many_partial_failure_boundaries",
+        ))
+
+    seen_names: set[str] = set()
+    for i, fragment in enumerate(req.fragments):
+        name = fragment.following_boundary
+        if not name.strip():
+            errors.append(_err(
+                ["fragments", i, "following_boundary"],
+                f"第 {i + 1} 个片段的后边界名不能为空白",
+                "invalid_boundary_name",
+            ))
+        if name in seen_names:
+            errors.append(_err(
+                ["fragments", i, "following_boundary"],
+                f"边界名重复：{name}（每个理论片段的后边界名必须唯一）",
+                "duplicate_boundary_name",
+            ))
+        seen_names.add(name)
+
+    if req.max_failed_boundaries > fragment_count:
+        errors.append(_err(
+            ["max_failed_boundaries"],
+            f"最大失败边界数（{req.max_failed_boundaries}）不能超过理论片段"
+            f"（边界）总数（{fragment_count}）",
+            "max_failed_boundaries_too_large",
+        ))
+
+    if len(req.observed_bands) > settings.MAX_BANDS:
+        errors.append(_err(
+            ["observed_bands"],
+            f"条带数量（{len(req.observed_bands)}）超过允许上限 {settings.MAX_BANDS}",
+            "too_many_bands",
+        ))
 
     if errors:
         raise DigestValidationError(errors)
